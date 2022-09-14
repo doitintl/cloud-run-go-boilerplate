@@ -1,0 +1,65 @@
+name: Containerize
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+  pull_request:
+jobs:
+  build-image:
+    name: Build Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+
+      - uses: actions/checkout@v3
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v0
+        with:
+          workload_identity_provider: 'projects/123456789/locations/global/workloadIdentityPools/gha-gcp/providers/gha-gcp'
+          service_account: 'terraform@project-id.iam.gserviceaccount.com'
+          token_format: 'access_token'
+          access_token_lifetime: '600s'
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Configure docker gcloud credentials helper
+        run: gcloud auth configure-docker europe-west1-docker.pkg.dev
+
+      - name: Docker metadata
+        id: tags
+        uses: docker/metadata-action@v4
+        with:
+          # list of Docker images to use as base name for tags
+          images: |
+            europe-west1-docker.pkg.dev/project-id/getcre-containers/cloud-run-go-boilerplate
+          # generate Docker tags based on the following events/attributes
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,priority=10200  # to get used in the Deploy step
+            latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: ${{ steps.tags.outputs.labels }}
+
+      - name: Deploy to Cloud Run  # currently assumes same project as AR
+        run: |
+          gcloud run deploy SERVICE_NAME -server --region=europe-west1 --image \
+          $(echo '${{ steps.tags.outputs.tags }}' | head -1)
+
